@@ -1,0 +1,7 @@
+﻿streamlit
+whisper
+sentence-transformers
+transformers
+torch
+pillow
+moviepy

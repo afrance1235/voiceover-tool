@@ -1,0 +1,103 @@
+﻿# app.py
+
+
+import streamlit as st
+import whisper
+from sentence_transformers import SentenceTransformer
+from transformers import CLIPProcessor, CLIPModel
+from PIL import Image
+import torch
+from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, AudioFileClip
+import os
+
+
+st.set_page_config(page_title="AI Video Creator", layout="wide")
+st.title("🎬 AI Video Creator")
+st.markdown("Upload a voiceover and media files. The app will match your media to the voiceover and create a video.")
+
+
+# Upload files
+voice_file = st.file_uploader("Upload Voiceover (MP3/WAV)", type=["mp3", "wav"])
+media_files = st.file_uploader("Upload Images or Videos", type=["jpg", "png", "mp4"], accept_multiple_files=True)
+
+
+if st.button("Generate Video") and voice_file and media_files:
+    with st.spinner("Processing... this may take a few minutes depending on file sizes"):
+        # Save uploaded files
+        voice_path = f"temp_{voice_file.name}"
+        with open(voice_path, "wb") as f:
+            f.write(voice_file.getbuffer())
+        
+        media_paths = []
+        for f in media_files:
+            path = f"temp_{f.name}"
+            with open(path, "wb") as out:
+                out.write(f.getbuffer())
+            media_paths.append(path)
+
+
+        # 1. Transcribe voiceover
+        st.info("Transcribing voiceover...")
+        model_w = whisper.load_model("base")
+        result = model_w.transcribe(voice_path)
+        transcription = result['text']
+        st.write("Transcription:", transcription)
+
+
+        # 2. Create embedding of transcription
+        st.info("Generating embeddings...")
+        model_s = SentenceTransformer('all-MiniLM-L6-v2')
+        voice_embedding = model_s.encode(transcription, convert_to_tensor=True)
+
+
+        # 3. Score media with CLIP
+        st.info("Matching media to voiceover...")
+        clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+
+
+        scored_media = []
+        for path in media_paths:
+            if path.lower().endswith((".jpg", ".png")):
+                image = Image.open(path)
+                inputs = processor(text=[transcription], images=image, return_tensors="pt", padding=True)
+                outputs = clip_model(**inputs)
+                score = outputs.logits_per_image.softmax(dim=1)[0][0].item()
+                scored_media.append((path, score))
+            else:
+                scored_media.append((path, 0.5))  # default for videos
+
+
+        # Select top 5 media
+        scored_media.sort(key=lambda x: x[1], reverse=True)
+        selected_media_files = [x[0] for x in scored_media[:5]]
+
+
+        # 4. Assemble video
+        st.info("Assembling video...")
+        clips = []
+        for media_file in selected_media_files:
+            if media_file.endswith(".mp4"):
+                clips.append(VideoFileClip(media_file))
+            else:
+                clips.append(ImageClip(media_file).set_duration(3))  # 3 seconds per image
+
+
+        audio = AudioFileClip(voice_path)
+        final_video = concatenate_videoclips(clips).set_audio(audio)
+        output_path = "output.mp4"
+        final_video.write_videofile(output_path, fps=24)
+
+
+        st.video(output_path)
+        st.success("✅ Video generated successfully!")
+
+
+# Clean up temp files when done (optional)
+def cleanup_temp_files():
+    files = [f for f in os.listdir() if f.startswith("temp_")]
+    for f in files:
+        os.remove(f)
+
+
+st.button("Clean Temporary Files", on_click=cleanup_temp_files)
