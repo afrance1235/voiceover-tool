@@ -1,7 +1,7 @@
-﻿streamlit
+streamlit
 whisper
 sentence-transformers
 transformers
 torch
 pillow
-moviepy
+moviepy==1.0.3
